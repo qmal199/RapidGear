@@ -1,1 +1,190 @@
-const express = require('express'); const sqlite3 = require('sqlite3').verbose(); const bcrypt = require('bcrypt'); const bodyParser = require('body-parser'); const cors = require('cors'); const path = require('path');  const app = express(); app.use(bodyParser.json()); app.use(cors());  // 静态文件 app.use(express.static('public'));  // 根目录返回 index.html app.get('/', (req, res) => {   res.sendFile(path.join(__dirname, 'public', 'index.html')); });  // SQLite 数据库 const db = new sqlite3.Database('./forum.db');  db.serialize(() => {   db.run(`CREATE TABLE IF NOT EXISTS users (     id INTEGER PRIMARY KEY AUTOINCREMENT,     username TEXT UNIQUE,     password_hash TEXT,     points INTEGER DEFAULT 0,     created_at DATETIME DEFAULT CURRENT_TIMESTAMP   )`);    db.run(`CREATE TABLE IF NOT EXISTS posts (     id INTEGER PRIMARY KEY AUTOINCREMENT,     user_id INTEGER,     title TEXT,     content TEXT,     created_at DATETIME DEFAULT CURRENT_TIMESTAMP   )`);    db.run(`CREATE TABLE IF NOT EXISTS comments (     id INTEGER PRIMARY KEY AUTOINCREMENT,     post_id INTEGER,     user_id INTEGER,     content TEXT,     created_at DATETIME DEFAULT CURRENT_TIMESTAMP   )`); });  // 注册 app.post('/register', async (req, res) => {   const { username, password } = req.body;   const hash = await bcrypt.hash(password, 10);   db.run(`INSERT INTO users (username, password_hash) VALUES (?, ?)`, [username, hash], function(err) {     if (err) return res.status(400).json({ error: '用户名已存在' });     res.json({ success: true, user_id: this.lastID });   }); });  // 登录 app.post('/login', (req, res) => {   const { username, password } = req.body;   db.get(`SELECT * FROM users WHERE username = ?`, [username], async (err, row) => {     if (!row) return res.status(400).json({ error: '用户名不存在' });     const valid = await bcrypt.compare(password, row.password_hash);     if (!valid) return res.status(400).json({ error: '密码错误' });     res.json({ success: true, user_id: row.id, username: row.username, points: row.points });   }); });  // 发帖 app.post('/posts', (req, res) => {   const { user_id, title, content } = req.body;   db.run(`INSERT INTO posts (user_id, title, content) VALUES (?, ?, ?)`, [user_id, title, content], function(err) {     if (err) return res.status(500).json({ error: '发帖失败' });     db.run(`UPDATE users SET points = points + 5 WHERE id = ?`, [user_id]);     res.json({ success: true, post_id: this.lastID });   }); });  // 评论 app.post('/comments', (req, res) => {   const { post_id, user_id, content } = req.body;   db.run(`INSERT INTO comments (post_id, user_id, content) VALUES (?, ?, ?)`, [post_id, user_id, content], function(err) {     if (err) return res.status(500).json({ error: '评论失败' });     db.run(`UPDATE users SET points = points + 2 WHERE id = ?`, [user_id]);     res.json({ success: true, comment_id: this.lastID });   }); });  // 获取帖子列表 app.get('/posts', (req, res) => {   db.all(`SELECT posts.*, users.username FROM posts JOIN users ON posts.user_id = users.id ORDER BY posts.created_at DESC`, [], (err, rows) => {     res.json(rows);   }); });  // 获取帖子详情 + 评论 app.get('/posts/:id', (req, res) => {   const postId = req.params.id;   db.get(`SELECT posts.*, users.username FROM posts JOIN users ON posts.user_id = users.id WHERE posts.id = ?`, [postId], (err, post) => {     db.all(`SELECT comments.*, users.username FROM comments JOIN users ON comments.user_id = users.id WHERE post_id = ? ORDER BY created_at ASC`, [postId], (err, comments) => {       res.json({ post, comments });     });   }); });  // 使用 Render 分配端口 const PORT = process.env.PORT || 3000; app.listen(PORT, () => console.log(`RapidGear 论坛已启动，端口: ${PORT}`));
+// ===== RapidGear - Vercel 专用 server.js =====
+// 直接用此文件完整替换你 GitHub 仓库中的 server.js
+
+const express = require('express');
+const path = require('path');
+
+const app = express();
+
+// ===== 中间件 =====
+app.use(express.json());
+
+// 静态文件目录（public 文件夹）
+app.use(express.static(path.join(__dirname, 'public')));
+
+// ===== 内存数据（Vercel 兼容，不使用 sqlite3）=====
+const users = [];
+const posts = [];
+const comments = [];
+
+// ===== 首页 =====
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// ===== 注册 =====
+app.post('/register', (req, res) => {
+  const { username, password } = req.body || {};
+
+  if (!username || !password) {
+    return res.status(400).json({
+      error: '用户名和密码不能为空'
+    });
+  }
+
+  const exists = users.find(u => u.username === username);
+  if (exists) {
+    return res.status(400).json({
+      error: '用户名已存在'
+    });
+  }
+
+  const user = {
+    id: users.length + 1,
+    username,
+    password, // 演示用途；正式环境建议加密
+    points: 0,
+    created_at: new Date().toISOString()
+  };
+
+  users.push(user);
+
+  res.json({
+    success: true,
+    user_id: user.id
+  });
+});
+
+// ===== 登录 =====
+app.post('/login', (req, res) => {
+  const { username, password } = req.body || {};
+
+  const user = users.find(
+    u => u.username === username && u.password === password
+  );
+
+  if (!user) {
+    return res.status(400).json({
+      error: '用户名或密码错误'
+    });
+  }
+
+  res.json({
+    success: true,
+    user_id: user.id,
+    username: user.username,
+    points: user.points
+  });
+});
+
+// ===== 发帖 =====
+app.post('/posts', (req, res) => {
+  const { user_id, title, content } = req.body || {};
+
+  if (!user_id || !title || !content) {
+    return res.status(400).json({
+      error: '参数不完整'
+    });
+  }
+
+  const user = users.find(u => u.id == user_id);
+  if (!user) {
+    return res.status(400).json({
+      error: '用户不存在'
+    });
+  }
+
+  const post = {
+    id: posts.length + 1,
+    user_id: Number(user_id),
+    username: user.username,
+    title,
+    content,
+    created_at: new Date().toISOString()
+  };
+
+  // 新帖子放到最前面
+  posts.unshift(post);
+
+  // 发帖奖励积分
+  user.points += 5;
+
+  res.json({
+    success: true,
+    post_id: post.id
+  });
+});
+
+// ===== 评论 =====
+app.post('/comments', (req, res) => {
+  const { post_id, user_id, content } = req.body || {};
+
+  if (!post_id || !user_id || !content) {
+    return res.status(400).json({
+      error: '参数不完整'
+    });
+  }
+
+  const user = users.find(u => u.id == user_id);
+  if (!user) {
+    return res.status(400).json({
+      error: '用户不存在'
+    });
+  }
+
+  const post = posts.find(p => p.id == post_id);
+  if (!post) {
+    return res.status(400).json({
+      error: '帖子不存在'
+    });
+  }
+
+  const comment = {
+    id: comments.length + 1,
+    post_id: Number(post_id),
+    user_id: Number(user_id),
+    username: user.username,
+    content,
+    created_at: new Date().toISOString()
+  };
+
+  comments.push(comment);
+
+  // 评论奖励积分
+  user.points += 2;
+
+  res.json({
+    success: true,
+    comment_id: comment.id
+  });
+});
+
+// ===== 获取帖子列表 =====
+app.get('/posts', (req, res) => {
+  res.json(posts);
+});
+
+// ===== 获取帖子详情 + 评论 =====
+app.get('/posts/:id', (req, res) => {
+  const postId = Number(req.params.id);
+
+  const post = posts.find(p => p.id === postId);
+
+  if (!post) {
+    return res.status(404).json({
+      error: '帖子不存在'
+    });
+  }
+
+  const postComments = comments.filter(
+    c => c.post_id === postId
+  );
+
+  res.json({
+    post,
+    comments: postComments
+  });
+});
+
+// ===== Vercel 必须使用 module.exports =====
+module.exports = app;
