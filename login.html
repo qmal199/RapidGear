@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RapidGear - 登录</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<h2>RapidGear - 登录</h2>
+<input id="username" placeholder="用户名"><br>
+<input id="password" type="password" placeholder="密码"><br>
+<button onclick="login()">登录</button>
+<script>
+function login(){
+  fetch('/login',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      username: document.getElementById('username').value,
+      password: document.getElementById('password').value
+    })
+  }).then(r=>r.json()).then(res=>{
+    if(res.success){
+      localStorage.setItem('user', JSON.stringify(res));
+      alert('登录成功'); location.href='index.html';
+    }else alert(res.error);
+  });
+}
+</script>
+</body>
+</html>
